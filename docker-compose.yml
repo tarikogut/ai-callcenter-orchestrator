@@ -25,6 +25,8 @@ services:
     image: jambonz/rtpengine:latest
     container_name: callcenter-rtpengine
     restart: unless-stopped
+    user: root
+    entrypoint: ["/bin/bash", "-c", "mkdir -p /rec && chmod 777 /rec && exec /entrypoint.sh rtpengine"]
     environment:
       LISTEN_NG: "0.0.0.0:22222"
       PORT_MIN: "22222"
@@ -42,8 +44,8 @@ services:
     container_name: callcenter-kamailio
     restart: unless-stopped
     ports:
-      - "5060:5060/udp"
-      - "5060:5060/tcp"
+      - "5062:5060/udp"
+      - "5062:5060/tcp"
     volumes:
       - ./config/kamailio/kamailio.cfg:/etc/kamailio/kamailio.cfg:ro
     depends_on:
@@ -85,7 +87,7 @@ services:
       DIAMETER_ORIGIN_HOST: "orchestrator.icell.cloud"
       DIAMETER_ORIGIN_REALM: "icell.cloud"
     ports:
-      - "8080:8080"
+      - "8085:8080"
     depends_on:
       postgres:
         condition: service_healthy
@@ -100,7 +102,7 @@ services:
     container_name: callcenter-frontend
     restart: unless-stopped
     ports:
-      - "3000:80"
+      - "3005:80"
     depends_on:
       - orchestrator
     networks:
