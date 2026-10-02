@@ -141,5 +141,8 @@ func SetupApp(database *gorm.DB) *fiber.App {
 		}
 	}))
 
+	// mod_audio_fork real-time audio stream WebSocket endpoint
+	app.Get("/ws/audio", websocket.New(handler.HandleAudioStream))
+
 	return app
 }

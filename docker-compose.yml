@@ -1,0 +1,115 @@
+services:
+  # 1. PostgreSQL Database
+  postgres:
+    image: postgres:16-alpine
+    container_name: callcenter-postgres
+    restart: unless-stopped
+    environment:
+      POSTGRES_USER: postgres
+      POSTGRES_PASSWORD: callcenter_secret_pw
+      POSTGRES_DB: callcenter_db
+    ports:
+      - "5432:5432"
+    volumes:
+      - postgres_data:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U postgres -d callcenter_db"]
+      interval: 5s
+      timeout: 5s
+      retries: 5
+    networks:
+      - callcenter-net
+
+  # 2. RTPEngine Media Proxy
+  rtpengine:
+    image: sipwise/rtpengine:latest
+    container_name: callcenter-rtpengine
+    restart: unless-stopped
+    environment:
+      LISTEN_NG: "0.0.0.0:22222"
+      PORT_MIN: "22222"
+      PORT_MAX: "22230"
+      TABLE: "0"
+    ports:
+      - "22222:22222/udp"
+      - "22223-22230:22223-22230/udp"
+    networks:
+      - callcenter-net
+
+  # 3. Kamailio SBC & Registrar
+  kamailio:
+    image: kamailio/kamailio:5.8-alpine
+    container_name: callcenter-kamailio
+    restart: unless-stopped
+    ports:
+      - "5060:5060/udp"
+      - "5060:5060/tcp"
+    volumes:
+      - ./config/kamailio/kamailio.cfg:/etc/kamailio/kamailio.cfg:ro
+    depends_on:
+      - rtpengine
+    networks:
+      - callcenter-net
+
+  # 4. FreeSWITCH Media & Audio Fork Bridge
+  freeswitch:
+    image: freeswitch/freeswitch:latest
+    container_name: callcenter-freeswitch
+    restart: unless-stopped
+    ports:
+      - "5080:5080/udp"
+      - "5080:5080/tcp"
+      - "8021:8021/tcp" # ESL Event Socket Library
+      - "7443:7443/tcp" # WebRTC WSS SIP transport
+    volumes:
+      - ./config/freeswitch/dialplan/default.xml:/etc/freeswitch/dialplan/default.xml:ro
+      - ./config/freeswitch/autoload_configs/audio_fork.conf.xml:/etc/freeswitch/autoload_configs/audio_fork.conf.xml:ro
+      - ./config/freeswitch/directory/default:/etc/freeswitch/directory/default:ro
+    depends_on:
+      - orchestrator
+    networks:
+      - callcenter-net
+
+  # 5. Go Visual Workflow & AI Orchestrator Backend
+  orchestrator:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    container_name: callcenter-orchestrator
+    restart: unless-stopped
+    environment:
+      PORT: "8080"
+      DATABASE_URL: "postgres://postgres:callcenter_secret_pw@postgres:5432/callcenter_db?sslmode=disable"
+      FREESWITCH_ESL_ADDR: "freeswitch:8021"
+      FREESWITCH_ESL_PASSWORD: "ClueCon"
+      DIAMETER_ORIGIN_HOST: "orchestrator.icell.cloud"
+      DIAMETER_ORIGIN_REALM: "icell.cloud"
+    ports:
+      - "8080:8080"
+    depends_on:
+      postgres:
+        condition: service_healthy
+    networks:
+      - callcenter-net
+
+  # 6. React / Vite Web Studio UI & Softphone
+  frontend:
+    build:
+      context: ./ui
+      dockerfile: Dockerfile
+    container_name: callcenter-frontend
+    restart: unless-stopped
+    ports:
+      - "3000:80"
+    depends_on:
+      - orchestrator
+    networks:
+      - callcenter-net
+
+volumes:
+  postgres_data:
+    driver: local
+
+networks:
+  callcenter-net:
+    driver: bridge

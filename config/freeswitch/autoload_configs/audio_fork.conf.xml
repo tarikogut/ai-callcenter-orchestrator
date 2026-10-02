@@ -1,0 +1,26 @@
+<configuration name="audio_fork.conf" description="mod_audio_fork Configuration">
+  <settings>
+    <!-- Maximum buffering in milliseconds for incoming / outgoing audio packets -->
+    <param name="buffer-size-ms" value="20"/>
+
+    <!-- Buffer size in bytes (16kHz 16-bit mono = 32 bytes/ms -> 20ms = 640 bytes) -->
+    <param name="buffer-size-bytes" value="640"/>
+
+    <!-- Audio sampling rate for AI recognition and synthesis (16000Hz standard for Gemini/Whisper) -->
+    <param name="sampling-rate" value="16000"/>
+
+    <!-- Audio channel configuration (mono = 1 channel) -->
+    <param name="channels" value="1"/>
+
+    <!-- WebSocket Transport & Protocol parameters -->
+    <param name="ws-heartbeat-ms" value="5000"/>
+    <param name="ws-connection-timeout-ms" value="10000"/>
+    <param name="ws-ping-interval-sec" value="15"/>
+
+    <!-- Maximum connection pool size -->
+    <param name="max-sessions" value="1000"/>
+
+    <!-- Audio format encoding sent over WebSocket binary frames (linear 16-bit PCM) -->
+    <param name="audio-encoding" value="pcm_s16le"/>
+  </settings>
+</configuration>

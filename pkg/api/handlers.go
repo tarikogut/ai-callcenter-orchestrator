@@ -1,22 +1,39 @@
 package api
 
 import (
+	"context"
 	"errors"
+	"log"
 	"strconv"
 	"strings"
+	"time"
 
 	"github.com/gofiber/fiber/v2"
+	"github.com/gofiber/websocket/v2"
 	"github.com/google/uuid"
+	"github.com/tarikogut/ai-callcenter-orchestrator/pkg/ai"
 	"github.com/tarikogut/ai-callcenter-orchestrator/pkg/db"
+	"github.com/tarikogut/ai-callcenter-orchestrator/pkg/workflow"
 	"gorm.io/gorm"
 )
 
 type APIHandler struct {
-	DB *gorm.DB
+	DB            *gorm.DB
+	CallHandler   *workflow.CallHandler
+	StreamManager *ai.AudioStreamManager
 }
 
 func NewAPIHandler(database *gorm.DB) *APIHandler {
-	return &APIHandler{DB: database}
+	engine := workflow.NewEngine(nil)
+	resolver := func(tenantID, did string) (*workflow.WorkflowDefinition, error) {
+		return nil, nil
+	}
+	callHandler := workflow.NewCallHandler(engine, nil, resolver)
+	return &APIHandler{
+		DB:            database,
+		CallHandler:   callHandler,
+		StreamManager: callHandler.StreamManager(),
+	}
 }
 
 func getTenantID(c *fiber.Ctx) string {
@@ -632,4 +649,102 @@ func (h *APIHandler) HandleSmsWebhook(c *fiber.Ctx) error {
 		"dispatched": true,
 	})
 }
+
+// ==========================================
+// WEBSOCKET (FreeSWITCH mod_audio_fork /ws/audio)
+// ==========================================
+
+// HandleAudioStream coordinates bidirectional PCM audio streaming between FreeSWITCH and Live AI engine.
+func (h *APIHandler) HandleAudioStream(c *websocket.Conn) {
+	callUUID := c.Query("call_uuid")
+	if callUUID == "" {
+		callUUID = c.Query("uuid")
+	}
+	if callUUID == "" {
+		callUUID = uuid.New().String()
+	}
+
+	tenantID := c.Query("tenant_id")
+	if tenantID == "" {
+		tenantID = "default_tenant"
+	}
+
+	sampleRate := 8000
+	rateStr := c.Query("sample_rate")
+	if rateStr == "" {
+		rateStr = c.Query("rate")
+	}
+	if rateStr == "16000" {
+		sampleRate = 16000
+	}
+
+	log.Printf("[AudioStream] FreeSWITCH mod_audio_fork connected: call_uuid=%s, tenant=%s, rate=%d", callUUID, tenantID, sampleRate)
+
+	// Fetch tenant settings if database is configured
+	var settings db.TenantSettings
+	if h.DB != nil {
+		_ = h.DB.Where("tenant_id = ?", tenantID).First(&settings).Error
+	}
+
+	var aiEngine ai.LiveAIEngine
+	if strings.EqualFold(settings.Provider, "Gemini") && settings.ApiKey != "" {
+		geminiCfg := ai.GeminiLiveConfig{
+			APIKey:            settings.ApiKey,
+			Model:             ai.DefaultGeminiLiveModel,
+			VoiceName:         settings.ActiveVoiceID,
+			SystemInstruction: settings.PersonaPrompt,
+			InputSampleRate:   16000,
+		}
+		client := ai.NewGeminiLiveClient(geminiCfg)
+		ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+		if err := client.Connect(ctx); err == nil {
+			client.StartReadLoop()
+			aiEngine = client
+		} else {
+			log.Printf("[AudioStream] Could not connect to Gemini Live (%v), falling back to modular streaming", err)
+		}
+		cancel()
+	}
+
+	if aiEngine == nil {
+		// Fallback to modular streaming (Deepgram STT -> Instant Filler Injection -> LLM -> Cartesia/ElevenLabs TTS)
+		modCfg := ai.ModularStreamerConfig{
+			PersonaName:   settings.PersonaName,
+			PersonaPrompt: settings.PersonaPrompt,
+			VoiceID:       settings.ActiveVoiceID,
+			FillerPhrases: settings.FillerPhrases,
+			SampleRate:    16000,
+		}
+		aiEngine = ai.NewModularStreamer(modCfg, nil, nil, nil)
+	}
+
+	cfg := ai.StreamerConfig{
+		CallUUID:     callUUID,
+		TenantID:     tenantID,
+		InboundRate:  sampleRate,
+		OutboundRate: sampleRate,
+		AIRate:       16000,
+	}
+
+	streamer := ai.NewAudioStreamer(cfg, c, aiEngine)
+
+	if h.CallHandler != nil {
+		h.CallHandler.AttachAudioStreamer(streamer)
+	} else if h.StreamManager != nil {
+		h.StreamManager.Register(callUUID, streamer)
+	}
+
+	defer func() {
+		log.Printf("[AudioStream] FreeSWITCH mod_audio_fork disconnected: call_uuid=%s", callUUID)
+		if h.CallHandler != nil && h.CallHandler.StreamManager() != nil {
+			h.CallHandler.StreamManager().Unregister(callUUID)
+		} else if h.StreamManager != nil {
+			h.StreamManager.Unregister(callUUID)
+		}
+		_ = streamer.Close()
+	}()
+
+	streamer.Start()
+}
+
 

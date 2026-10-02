@@ -1,0 +1,23 @@
+<include>
+  <user id="102">
+    <params>
+      <param name="password" value="eczane102pass"/>
+      <param name="vm-password" value="102"/>
+    </params>
+    <variables>
+      <variable name="toll_allow" value="domestic,international,local"/>
+      <variable name="accountcode" value="102"/>
+      <variable name="user_context" value="default"/>
+      <variable name="effective_caller_id_name" value="Eczane Danışma 102"/>
+      <variable name="effective_caller_id_number" value="102"/>
+      <variable name="outbound_caller_id_name" value="Hayat Eczanesi"/>
+      <variable name="outbound_caller_id_number" value="08501110001"/>
+      <variable name="tenant_id" value="eczane_hayat"/>
+      <!-- WebRTC & DTLS / SRTP Parameters -->
+      <variable name="ws-binding" value=":7443"/>
+      <variable name="sip-force-contact" value="NDLB-connectile-dysfunction"/>
+      <variable name="media_webrtc" value="true"/>
+      <variable name="rtp_secure_media" value="optional"/>
+    </variables>
+  </user>
+</include>

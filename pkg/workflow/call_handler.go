@@ -9,6 +9,7 @@ import (
 	"sync"
 	"time"
 
+	"github.com/tarikogut/ai-callcenter-orchestrator/pkg/ai"
 	"github.com/tarikogut/ai-callcenter-orchestrator/pkg/diameter"
 )
 
@@ -31,7 +32,7 @@ type CallControlAction struct {
 	CallUUID    string                 `json:"call_uuid"`
 	Command     string                 `json:"command"`      // "uuid_transfer", "uuid_kill", "playback", "speak"
 	Target      string                 `json:"target"`       // e.g. "101 XML default"
-	Params      map[string]interface{} `json:"params"`
+	Params      map[string]interface{} `json:"params,omitempty"`
 	Timestamp   time.Time              `json:"timestamp"`
 }
 
@@ -43,6 +44,7 @@ type CallHandler struct {
 	engine           *Engine
 	diamClient       diameter.RoClient
 	workflowResolver CallWorkflowResolver
+	streamManager    *ai.AudioStreamManager
 
 	mu               sync.RWMutex
 	activeCalls      map[string]*ExecutionContext // CallUUID -> ExecutionContext
@@ -55,8 +57,48 @@ func NewCallHandler(engine *Engine, diamClient diameter.RoClient, resolver CallW
 		engine:           engine,
 		diamClient:       diamClient,
 		workflowResolver: resolver,
+		streamManager:    ai.NewAudioStreamManager(),
 		activeCalls:      make(map[string]*ExecutionContext),
 		actionQueue:      make(chan CallControlAction, 1000),
+	}
+}
+
+// StreamManager returns the active audio stream manager.
+func (h *CallHandler) StreamManager() *ai.AudioStreamManager {
+	return h.streamManager
+}
+
+// SetStreamManager sets an external audio stream manager.
+func (h *CallHandler) SetStreamManager(sm *ai.AudioStreamManager) {
+	h.streamManager = sm
+}
+
+// AttachAudioStreamer registers an active audio stream and binds its barge-in control signals.
+func (h *CallHandler) AttachAudioStreamer(streamer *ai.AudioStreamer) {
+	if streamer == nil {
+		return
+	}
+	if h.streamManager != nil {
+		h.streamManager.Register(streamer.CallUUID(), streamer)
+	}
+
+	// Wire FreeSWITCH control actions (such as uuid_break on barge-in) to CallHandler actionQueue
+	streamer.SetOnControlAction(func(act ai.CallControlAction) {
+		h.actionQueue <- CallControlAction{
+			CallUUID:  act.CallUUID,
+			Command:   act.Command,
+			Target:    act.Target,
+			Params:    act.Params,
+			Timestamp: act.Timestamp,
+		}
+	})
+}
+
+// EmitCallControl dispatches a control action to the outbound action queue.
+func (h *CallHandler) EmitCallControl(action CallControlAction) {
+	select {
+	case h.actionQueue <- action:
+	default:
 	}
 }
 
@@ -156,6 +198,11 @@ func (h *CallHandler) HandleCallHangup(ctx context.Context, callUUID string, dur
 
 	execCtx.CallState = CallStateHangup
 	execCtx.IsTerminated = true
+
+	// Terminate active audio stream session if any
+	if h.streamManager != nil {
+		h.streamManager.HandleHangup(callUUID)
+	}
 
 	// Terminate Diameter Ro session if client exists
 	if h.diamClient != nil {

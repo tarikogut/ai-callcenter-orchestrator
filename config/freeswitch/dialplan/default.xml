@@ -1,0 +1,65 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!-- FreeSWITCH Inbound & Multi-Tenant Dialplan for AI Call Center Orchestrator -->
+<include>
+  <context name="default">
+
+    <!-- Extension for routing unmapped extension calls to registered users -->
+    <extension name="Local_Extension">
+      <condition field="destination_number" expression="^(10[1-9]|20[1-9])$">
+        <action application="set" data="dialed_extension=$1"/>
+        <action application="export" data="dialed_extension=$1"/>
+        <action application="bridge" data="user/${dialed_extension}@${domain_name}"/>
+      </condition>
+    </extension>
+
+    <!-- Inbound DID: 08501110001 -> Tenant: eczane_hayat -->
+    <extension name="inbound_did_eczane_hayat">
+      <condition field="destination_number" expression="^(08501110001|\+?908501110001)$">
+        <action application="answer"/>
+        <action application="set" data="tenant_id=eczane_hayat"/>
+        <action application="set" data="tenant_name=Hayat Eczanesi"/>
+        <action application="set" data="workflow_id=wf-eczane-main"/>
+        <action application="set" data="carrier_did=08501110001"/>
+        <action application="set" data="ringback=${us-ring}"/>
+        <action application="info"/>
+        <!-- Launch mod_audio_fork real-time PCM audio streaming to Go orchestrator -->
+        <!-- Format: audio_fork <uuid> start <ws_url> <mix_type> <sampling_rate> -->
+        <action application="audio_fork" data="${uuid} start ws://orchestrator:8080/ws/audio?uuid=${uuid}&amp;tenant_id=${tenant_id}&amp;rate=16000 mono 16000"/>
+        <!-- Park channel to keep call open and alive during AI bi-directional conversation -->
+        <action application="park"/>
+      </condition>
+    </extension>
+
+    <!-- Inbound DID: 08502220002 -> Tenant: jet_kargo -->
+    <extension name="inbound_did_jet_kargo">
+      <condition field="destination_number" expression="^(08502220002|\+?908502220002)$">
+        <action application="answer"/>
+        <action application="set" data="tenant_id=jet_kargo"/>
+        <action application="set" data="tenant_name=Jet Kargo"/>
+        <action application="workflow_id=wf-kargo-main"/>
+        <action application="set" data="carrier_did=08502220002"/>
+        <action application="set" data="ringback=${us-ring}"/>
+        <action application="info"/>
+        <!-- Launch mod_audio_fork real-time PCM audio streaming to Go orchestrator -->
+        <action application="audio_fork" data="${uuid} start ws://orchestrator:8080/ws/audio?uuid=${uuid}&amp;tenant_id=${tenant_id}&amp;rate=16000 mono 16000"/>
+        <!-- Park channel to keep call open and alive during AI bi-directional conversation -->
+        <action application="park"/>
+      </condition>
+    </extension>
+
+    <!-- Generic / Dynamic DID matching fallback -->
+    <extension name="inbound_did_generic">
+      <condition field="destination_number" expression="^(0850\d{7}|\+?90850\d{7}|\d{10,12})$">
+        <action application="answer"/>
+        <action application="set" data="tenant_id=${sip_h_X-Tenant-ID}"/>
+        <action application="set" data="tenant_id=${cond(${len(${tenant_id})} > 0 ? ${tenant_id} : default_tenant)}"/>
+        <action application="set" data="carrier_did=${destination_number}"/>
+        <action application="info"/>
+        <!-- Stream audio to orchestrator -->
+        <action application="audio_fork" data="${uuid} start ws://orchestrator:8080/ws/audio?uuid=${uuid}&amp;tenant_id=${tenant_id}&amp;rate=16000 mono 16000"/>
+        <action application="park"/>
+      </condition>
+    </extension>
+
+  </context>
+</include>
