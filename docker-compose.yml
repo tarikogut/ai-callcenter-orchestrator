@@ -94,15 +94,29 @@ services:
     networks:
       - callcenter-net
 
-  # 6. React / Vite Web Studio UI & Softphone
-  frontend:
+  # 6. Admin Portal (Super Admin UI)
+  admin-ui:
     build:
-      context: ./ui
+      context: ./ui-admin
       dockerfile: Dockerfile
-    container_name: callcenter-frontend
+    container_name: callcenter-admin-ui
     restart: unless-stopped
     ports:
-      - "3005:80"
+      - "3001:80"
+    depends_on:
+      - orchestrator
+    networks:
+      - callcenter-net
+
+  # 7. Customer Portal (Tenant Studio UI & Softphone)
+  customer-ui:
+    build:
+      context: ./ui-customer
+      dockerfile: Dockerfile
+    container_name: callcenter-customer-ui
+    restart: unless-stopped
+    ports:
+      - "3002:80"
     depends_on:
       - orchestrator
     networks:
