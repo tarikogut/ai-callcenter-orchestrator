@@ -6,10 +6,13 @@ import (
 	"encoding/json"
 	"net/http"
 	"net/http/httptest"
+	"strings"
 	"sync"
 	"testing"
 
 	"github.com/tarikogut/ai-callcenter-orchestrator/pkg/diameter"
+	"github.com/tarikogut/ai-callcenter-orchestrator/pkg/mcp"
+	"github.com/tarikogut/ai-callcenter-orchestrator/pkg/rag"
 )
 
 type MockSmsSender struct {
@@ -286,3 +289,77 @@ func TestSmsWorkflowExecution(t *testing.T) {
 		t.Errorf("expected remaining balance 4.80 TL, got %.2f", bal)
 	}
 }
+
+type mockWorkflowMcpClient struct{}
+
+func (m *mockWorkflowMcpClient) ListTools(ctx context.Context) ([]mcp.Tool, error) {
+	return []mcp.Tool{
+		{Name: "check_stock", Description: "Check stock"},
+	}, nil
+}
+
+func (m *mockWorkflowMcpClient) CallTool(ctx context.Context, name string, arguments map[string]interface{}) (*mcp.ToolCallResult, error) {
+	return &mcp.ToolCallResult{
+		Content: []mcp.ToolContent{
+			{Type: "text", Text: "Stock confirmed: 42 in stock"},
+		},
+	}, nil
+}
+
+func (m *mockWorkflowMcpClient) Close() error {
+	return nil
+}
+
+func TestWorkflowAiAgentWithRagAndMcp(t *testing.T) {
+	ragEng := rag.NewInMemoryEngine()
+	tenantID := "tenant_eczane_rag"
+	_ = ragEng.AddDocuments(context.Background(), rag.Document{
+		ID:       "faq_calisma",
+		TenantID: tenantID,
+		Category: "working_hours",
+		Question: "Eczane kaçta açılıyor ve kapanıyor?",
+		Answer:   "Eczanemiz 08:30 ile 19:00 saatleri arasında açıktır.",
+	})
+
+	mcpClient := &mockWorkflowMcpClient{}
+
+	execCtx := NewExecutionContext(tenantID, "wf_rag_01", "sess_rag_01", TriggerTypeCall, "905551234567", "08501112233")
+	execCtx.RagEngine = ragEng
+	execCtx.McpClient = mcpClient
+	execCtx.SetVariable("$last_user_speech", "Eczane kaçta açılıyor?")
+
+	// Test AiAgentNode with RAG injection
+	agentNode := NewAiAgentNode("agent_node", map[string]interface{}{
+		"agent_name": "Ayşe Eczane Asistanı",
+		"enable_rag": true,
+	})
+
+	res, err := agentNode.Execute(context.Background(), execCtx)
+	if err != nil {
+		t.Fatalf("AiAgentNode Execute failed: %v", err)
+	}
+	ragCtx, _ := res.Outputs["$rag_context"].(string)
+	if ragCtx == "" || !strings.Contains(ragCtx, "08:30 ile 19:00") {
+		t.Fatalf("expected RAG context injected into outputs, got: %s", ragCtx)
+	}
+
+	// Test McpToolNode with McpClient
+	mcpNode := NewMcpToolNode("mcp_node", map[string]interface{}{
+		"tool_name": "check_stock",
+		"arguments": map[string]interface{}{"drug": "Aspirin"},
+	})
+
+	mcpRes, err := mcpNode.Execute(context.Background(), execCtx)
+	if err != nil {
+		t.Fatalf("McpToolNode Execute failed: %v", err)
+	}
+	toolSuccess, _ := mcpRes.Outputs["$tool_success"].(bool)
+	if !toolSuccess {
+		t.Fatalf("expected tool_success true, got false")
+	}
+	toolResult, _ := mcpRes.Outputs["$tool_result"].(map[string]interface{})
+	if toolResult["result"] != "Stock confirmed: 42 in stock" {
+		t.Fatalf("unexpected tool result: %+v", toolResult)
+	}
+}
+

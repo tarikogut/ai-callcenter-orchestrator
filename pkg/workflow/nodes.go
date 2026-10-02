@@ -2,14 +2,14 @@ package workflow
 
 import (
 	"context"
-	"encoding/json"
 	"fmt"
-	"io"
 	"net/http"
 	"strings"
 	"time"
 
 	"github.com/tarikogut/ai-callcenter-orchestrator/pkg/diameter"
+	"github.com/tarikogut/ai-callcenter-orchestrator/pkg/mcp"
+	"github.com/tarikogut/ai-callcenter-orchestrator/pkg/rag"
 )
 
 // 1. InboundTriggerNode
@@ -56,7 +56,7 @@ func (n *InboundTriggerNode) Execute(ctx context.Context, execCtx *ExecutionCont
 }
 
 // 2. AiAgentNode
-// Config: { "agent_name": "...", "persona": "...", "filler_phrases": [...], "model": "..." }
+// Config: { "agent_name": "...", "persona": "...", "filler_phrases": [...], "model": "...", "enable_rag": true, "rag_top_k": 3 }
 type AiAgentNode struct {
 	id     string
 	config map[string]interface{}
@@ -111,9 +111,35 @@ func (n *AiAgentNode) Execute(ctx context.Context, execCtx *ExecutionContext) (*
 	// Append user input
 	execCtx.AppendDialogue("user", inputText)
 
-	// Simulated AI turn generation (or prompt chaining)
+	// RAG Knowledge Base Retrieval & Prompt Context Injection
+	var ragContext string
+	enableRAG := true
+	if v, ok := n.config["enable_rag"].(bool); ok {
+		enableRAG = v
+	}
+
+	topK := 3
+	if k, ok := n.config["rag_top_k"].(float64); ok {
+		topK = int(k)
+	} else if k, ok := n.config["rag_top_k"].(int); ok {
+		topK = k
+	}
+
+	if enableRAG && execCtx.RagEngine != nil {
+		if ragEng, ok := execCtx.RagEngine.(rag.Engine); ok {
+			formatted, err := ragEng.FormatPromptContext(ctx, execCtx.TenantID, inputText, topK)
+			if err == nil && formatted != "" {
+				ragContext = formatted
+			}
+		}
+	}
+
+	// Simulated AI turn generation (or prompt chaining with RAG context)
 	aiResponse := fmt.Sprintf("%s: Merhaba, size nasıl yardımcı olabilirim?", agentName)
-	if strings.Contains(strings.ToLower(inputText), "aspirin") || strings.Contains(strings.ToLower(inputText), "stok") {
+	if ragContext != "" {
+		// If RAG context found matching knowledge, reflect it in the response
+		aiResponse = fmt.Sprintf("%s (Bilgi Bankası): Sorduğunuz konu hakkında sistemimizdeki bilgiye göre yardımcı oluyorum.", agentName)
+	} else if strings.Contains(strings.ToLower(inputText), "aspirin") || strings.Contains(strings.ToLower(inputText), "stok") {
 		aiResponse = fmt.Sprintf("%s (Stok bilgisi sorgulandı: Mevcut)", agentName)
 	} else if strings.Contains(strings.ToLower(inputText), "temsilci") || strings.Contains(strings.ToLower(inputText), "insan") {
 		aiResponse = "Sizi yetkili temsilcimize aktarıyorum, lütfen hattan ayrılmayın."
@@ -127,6 +153,7 @@ func (n *AiAgentNode) Execute(ctx context.Context, execCtx *ExecutionContext) (*
 		"$persona":       persona,
 		"$filler_phrase": selectedFiller,
 		"$ai_response":   aiResponse,
+		"$rag_context":   ragContext,
 	}
 
 	return &NodeResult{
@@ -136,7 +163,7 @@ func (n *AiAgentNode) Execute(ctx context.Context, execCtx *ExecutionContext) (*
 }
 
 // 3. McpToolNode
-// Config: { "mcp_server": "https://...", "tool_name": "check_stock", "arguments": {...} }
+// Config: { "mcp_server": "https://...", "transport": "HTTP"|"SSE"|"STDIO", "tool_name": "check_stock", "arguments": {...} }
 type McpToolNode struct {
 	id         string
 	config     map[string]interface{}
@@ -163,42 +190,110 @@ func (n *McpToolNode) Execute(ctx context.Context, execCtx *ExecutionContext) (*
 		toolName = "default_tool"
 	}
 
-	// If mcpServer is set and points to an active HTTP endpoint, perform POST
+	args, _ := n.config["arguments"].(map[string]interface{})
+	if args == nil {
+		args = make(map[string]interface{})
+	}
+
 	var toolResult map[string]interface{}
 	var toolSuccess = true
 
-	if mcpServer != "" && strings.HasPrefix(mcpServer, "http") {
-		reqBody := map[string]interface{}{
-			"jsonrpc": "2.0",
-			"method":  "tools/call",
-			"params": map[string]interface{}{
-				"name":      toolName,
-				"arguments": n.config["arguments"],
-				"context": map[string]string{
-					"caller": execCtx.Caller,
-					"tenant": execCtx.TenantID,
-				},
-			},
-			"id": 1,
-		}
-		data, _ := json.Marshal(reqBody)
-
-		req, err := http.NewRequestWithContext(ctx, "POST", mcpServer, strings.NewReader(string(data)))
-		if err == nil {
-			req.Header.Set("Content-Type", "application/json")
-			resp, err := n.httpClient.Do(req)
-			if err == nil {
-				defer resp.Body.Close()
-				body, _ := io.ReadAll(resp.Body)
-				_ = json.Unmarshal(body, &toolResult)
-			} else {
+	// Priority 1: Check if an MCP client is provided in ExecutionContext
+	if execCtx.McpClient != nil {
+		if client, ok := execCtx.McpClient.(mcp.Client); ok {
+			res, err := client.CallTool(ctx, toolName, args)
+			if err != nil || (res != nil && res.IsError) {
 				toolSuccess = false
+				errMsg := "unknown tool execution error"
+				if err != nil {
+					errMsg = err.Error()
+				} else if len(res.Content) > 0 {
+					errMsg = res.Content[0].Text
+				}
+				toolResult = map[string]interface{}{
+					"tool":   toolName,
+					"status": "error",
+					"error":  errMsg,
+				}
+			} else if res != nil {
+				textOut := ""
+				for _, c := range res.Content {
+					if c.Text != "" {
+						if textOut != "" {
+							textOut += "\n"
+						}
+						textOut += c.Text
+					}
+				}
+				toolResult = map[string]interface{}{
+					"tool":    toolName,
+					"status":  "ok",
+					"result":  textOut,
+					"content": res.Content,
+					"matched": true,
+				}
 			}
 		}
 	}
 
+	// Priority 2: Use mcp.Client directly with configured transport and server endpoint
+	if toolResult == nil && mcpServer != "" {
+		transportStr, _ := n.config["transport"].(string)
+		transport := mcp.TransportHTTP
+		if strings.EqualFold(transportStr, "SSE") {
+			transport = mcp.TransportSSE
+		}
+
+		client, err := mcp.NewClient(mcp.ClientConfig{
+			Transport: transport,
+			Endpoint:  mcpServer,
+			Timeout:   5 * time.Second,
+			Headers: map[string]string{
+				"X-Tenant-ID": execCtx.TenantID,
+				"X-Caller":    execCtx.Caller,
+			},
+		})
+		if err == nil {
+			defer client.Close()
+			res, err := client.CallTool(ctx, toolName, args)
+			if err != nil || (res != nil && res.IsError) {
+				toolSuccess = false
+				errMsg := "tool call failed"
+				if err != nil {
+					errMsg = err.Error()
+				} else if len(res.Content) > 0 {
+					errMsg = res.Content[0].Text
+				}
+				toolResult = map[string]interface{}{
+					"tool":   toolName,
+					"status": "error",
+					"error":  errMsg,
+				}
+			} else if res != nil {
+				textOut := ""
+				for _, c := range res.Content {
+					if c.Text != "" {
+						if textOut != "" {
+							textOut += "\n"
+						}
+						textOut += c.Text
+					}
+				}
+				toolResult = map[string]interface{}{
+					"tool":    toolName,
+					"status":  "ok",
+					"result":  textOut,
+					"content": res.Content,
+					"matched": true,
+				}
+			}
+		} else {
+			toolSuccess = false
+		}
+	}
+
+	// Priority 3: Mock local fallback for standard tests / offline operations
 	if toolResult == nil {
-		// Mock local execution for standard tests / offline operations
 		toolResult = map[string]interface{}{
 			"tool":    toolName,
 			"status":  "ok",

@@ -62,6 +62,10 @@ type ExecutionContext struct {
 	TotalCost float64
 	Currency  string
 
+	// Knowledge Base & MCP
+	RagEngine interface{}
+	McpClient interface{}
+
 	// Control flags
 	IsTerminated bool
 }
