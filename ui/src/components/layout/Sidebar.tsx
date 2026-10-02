@@ -9,7 +9,6 @@ import {
   Headphones,
   FileSpreadsheet,
   Server,
-  Zap,
 } from 'lucide-react';
 import { PortalMode } from '../../types';
 

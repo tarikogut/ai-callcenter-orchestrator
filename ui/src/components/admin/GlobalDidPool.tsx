@@ -5,14 +5,13 @@ import {
   ArrowRightLeft,
   Search,
   CheckCircle,
-  XCircle,
   Radio,
   Building,
 } from 'lucide-react';
 import { DIDNumber, Tenant } from '../../types';
 import { Button } from '../ui/Button';
 import { Badge } from '../ui/Badge';
-import { Card, CardHeader, CardTitle, CardDescription, CardContent } from '../ui/Card';
+import { Card, CardHeader, CardTitle, CardContent } from '../ui/Card';
 import { Modal } from '../ui/Modal';
 
 interface GlobalDidPoolProps {

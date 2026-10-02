@@ -23,3 +23,5 @@ Thumbs.db
 # Frontend
 node_modules/
 dist/
+ui/node_modules/
+ui/dist/

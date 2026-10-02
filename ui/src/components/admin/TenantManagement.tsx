@@ -5,7 +5,6 @@ import {
   Lock,
   Unlock,
   Sliders,
-  DollarSign,
   PhoneCall,
   Search,
   CheckCircle2,

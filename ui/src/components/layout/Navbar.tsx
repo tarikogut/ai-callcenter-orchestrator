@@ -1,13 +1,11 @@
 import React from 'react';
 import {
-  PhoneCall,
   Shield,
   Building2,
   Moon,
   Sun,
   Headphones,
   Radio,
-  ChevronDown,
 } from 'lucide-react';
 import { Tenant, PortalMode } from '../../types';
 import { Button } from '../ui/Button';
