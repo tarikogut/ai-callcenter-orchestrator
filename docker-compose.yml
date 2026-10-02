@@ -22,7 +22,7 @@ services:
 
   # 2. RTPEngine Media Proxy
   rtpengine:
-    image: sipwise/rtpengine:latest
+    image: jambonz/rtpengine:latest
     container_name: callcenter-rtpengine
     restart: unless-stopped
     environment:
@@ -38,7 +38,7 @@ services:
 
   # 3. Kamailio SBC & Registrar
   kamailio:
-    image: kamailio/kamailio:5.8-alpine
+    image: ghcr.io/kamailio/kamailio-ci:latest
     container_name: callcenter-kamailio
     restart: unless-stopped
     ports:
@@ -53,7 +53,7 @@ services:
 
   # 4. FreeSWITCH Media & Audio Fork Bridge
   freeswitch:
-    image: freeswitch/freeswitch:latest
+    image: safarov/freeswitch:latest
     container_name: callcenter-freeswitch
     restart: unless-stopped
     ports:
