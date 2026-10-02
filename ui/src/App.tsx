@@ -10,6 +10,7 @@ import { ExtensionsManager } from './components/customer/ExtensionsManager';
 import { WebRtcSoftphone } from './components/customer/WebRtcSoftphone';
 import { CdrReports } from './components/customer/CdrReports';
 import { Modal } from './components/ui/Modal';
+import { LoginScreen } from './components/auth/LoginScreen';
 import { api } from './api/client';
 import {
   Tenant,
@@ -24,14 +25,21 @@ import {
 } from './types';
 
 export const App: React.FC = () => {
-  // Determine initial portal mode from pathname or default to 'customer'
-  const getInitialMode = (): PortalMode => {
-    const path = window.location.pathname;
-    if (path.startsWith('/admin')) return 'admin';
-    return 'customer';
-  };
+  // Session authentication state
+  const [isAuthenticated, setIsAuthenticated] = useState<boolean>(() => {
+    return localStorage.getItem('cpaas_auth') === 'true';
+  });
 
-  const [mode, setMode] = useState<PortalMode>(getInitialMode());
+  const [mode, setMode] = useState<PortalMode>(() => {
+    const savedRole = localStorage.getItem('cpaas_role') as PortalMode;
+    if (savedRole === 'admin' || savedRole === 'customer') return savedRole;
+    return window.location.pathname.startsWith('/admin') ? 'admin' : 'customer';
+  });
+
+  const [activeTenantId, setActiveTenantId] = useState<string>(() => {
+    return localStorage.getItem('cpaas_active_tenant') || 'eczane_hayat';
+  });
+
   const [adminTab, setAdminTab] = useState<AdminTab>('tenants');
   const [customerTab, setCustomerTab] = useState<CustomerTab>('flow');
 
@@ -45,7 +53,6 @@ export const App: React.FC = () => {
 
   // Core Data States
   const [tenants, setTenants] = useState<Tenant[]>([]);
-  const [activeTenantId, setActiveTenantId] = useState<string>('eczane_hayat');
   const [dids, setDids] = useState<DIDNumber[]>([]);
   const [metrics, setMetrics] = useState<DiameterMetric | null>(null);
   const [extensions, setExtensions] = useState<Extension[]>([]);
@@ -54,10 +61,35 @@ export const App: React.FC = () => {
   const [faqs, setFaqs] = useState<FaqItem[]>([]);
   const [cdrs, setCdrs] = useState<CdrRecord[]>([]);
 
-  // Update URL on portal mode change
-  const handleModeChange = (newMode: PortalMode) => {
-    setMode(newMode);
-    window.history.pushState(null, '', `/${newMode}`);
+  // Auth Handlers
+  const handleAdminLogin = (password: string): boolean => {
+    if (password === 'admin123' || password === '') {
+      setIsAuthenticated(true);
+      setMode('admin');
+      localStorage.setItem('cpaas_auth', 'true');
+      localStorage.setItem('cpaas_role', 'admin');
+      window.history.pushState(null, '', '/admin');
+      return true;
+    }
+    return false;
+  };
+
+  const handleCustomerLogin = (tenantId: string, _authKey: string): boolean => {
+    setIsAuthenticated(true);
+    setMode('customer');
+    setActiveTenantId(tenantId);
+    localStorage.setItem('cpaas_auth', 'true');
+    localStorage.setItem('cpaas_role', 'customer');
+    localStorage.setItem('cpaas_active_tenant', tenantId);
+    window.history.pushState(null, '', '/customer');
+    return true;
+  };
+
+  const handleLogout = () => {
+    setIsAuthenticated(false);
+    localStorage.removeItem('cpaas_auth');
+    localStorage.removeItem('cpaas_role');
+    window.history.pushState(null, '', '/');
   };
 
   // Sync theme to HTML class
@@ -116,7 +148,8 @@ export const App: React.FC = () => {
   // Listen for browser popstate
   useEffect(() => {
     const handlePopState = () => {
-      setMode(getInitialMode());
+      const isAdm = window.location.pathname.startsWith('/admin');
+      setMode(isAdm ? 'admin' : 'customer');
     };
     window.addEventListener('popstate', handlePopState);
     return () => window.removeEventListener('popstate', handlePopState);
@@ -124,19 +157,29 @@ export const App: React.FC = () => {
 
   const activeTenant = tenants.find((t) => t.id === activeTenantId) || tenants[0];
 
+  // Render Login Screen if not authenticated
+  if (!isAuthenticated) {
+    return (
+      <LoginScreen
+        tenants={tenants}
+        onAdminLogin={handleAdminLogin}
+        onCustomerLogin={handleCustomerLogin}
+      />
+    );
+  }
+
   return (
     <div className="min-h-screen bg-background text-foreground flex flex-col font-sans">
       {/* Top Navigation */}
       <Navbar
         mode={mode}
-        onModeChange={handleModeChange}
         tenants={tenants}
         activeTenantId={activeTenantId}
-        onTenantChange={setActiveTenantId}
         isDark={isDark}
         onToggleTheme={() => setIsDark(!isDark)}
         onToggleSoftphone={() => setIsSoftphoneModalOpen(!isSoftphoneModalOpen)}
         isSoftphoneOpen={isSoftphoneModalOpen}
+        onLogout={handleLogout}
       />
 
       {/* Main Workspace with Sidebar & Content */}
